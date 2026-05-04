@@ -8,13 +8,12 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = 'meetpro-2026-secret'
 CORS(app)
 
-# ✅ Using gevent - works reliably on Render free tier
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent',
+# ✅ threading mode — no eventlet/gevent, works on any Python version
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading',
                     logger=False, engineio_logger=False)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# ── In-memory state ──────────────────────────────────────────
 rooms        = {}
 user_sockets = {}
 socket_users = {}
@@ -29,7 +28,6 @@ def get_room(room_id):
         }
     return rooms[room_id]
 
-# ── Routes ───────────────────────────────────────────────────
 @app.route('/')
 @app.route('/room/<room_id>')
 def index(room_id=None):
@@ -49,22 +47,18 @@ def room_info(room_id):
     return jsonify({'exists': True, 'participants': len(r['participants']),
                     'created_at': r['created_at']})
 
-# ── Socket Events ─────────────────────────────────────────────
 @socketio.on('join')
 def on_join(data):
     room_id = data.get('roomId', '').upper().strip()
     name    = (data.get('name') or 'Guest').strip()[:40]
     user_id = data.get('userId') or str(uuid.uuid4())
-
     room = get_room(room_id)
     if len(room['participants']) >= 50:
         emit('error', {'message': 'Room is full (50/50).'})
         return
-
     join_room(room_id)
     user_sockets[user_id]     = request.sid
     socket_users[request.sid] = {'userId': user_id, 'roomId': room_id}
-
     participant = {
         'id': user_id, 'name': name,
         'joinedAt': datetime.now().isoformat(),
@@ -72,7 +66,6 @@ def on_join(data):
         'audioOn': data.get('audioOn', True), 'isScreenSharing': False,
     }
     room['participants'][user_id] = participant
-
     emit('room-joined', {
         'userId': user_id, 'roomId': room_id,
         'participants': [p for uid, p in room['participants'].items() if uid != user_id],
