@@ -8,7 +8,6 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = 'meetpro-2026-secret'
 CORS(app)
 
-# ✅ threading mode — no eventlet/gevent, works on any Python version
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading',
                     logger=False, engineio_logger=False)
 
@@ -149,5 +148,6 @@ def on_disconnect():
             del rooms[room_id]
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5001))
-    socketio.run(app, host='0.0.0.0', port=port, debug=False)
+    port = int(os.environ.get('PORT', 10000))
+    socketio.run(app, host='0.0.0.0', port=port, debug=False,
+                 allow_unsafe_werkzeug=True)
