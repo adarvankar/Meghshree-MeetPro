@@ -433,14 +433,6 @@ input,textarea{outline:none;font-family:inherit}
 <div class="toast-wrap" id="toastwrap"></div>
 
 <script>
-// ════════════ BACKEND CONFIG ════════════
-// 👇 Set this to your Railway backend URL after deploying
-// Example: 'https://meetpro-production.up.railway.app'
-// Leave as '' to use same origin (when running locally)
-const BACKEND_URL = '';   // ← REPLACE WITH YOUR RAILWAY URL
-
-const API_BASE = BACKEND_URL || location.origin;
-
 // ════════════ STATE ════════════
 let socket=null, myId=null, myName='', roomId=null;
 let localStream=null, screenStream=null;
@@ -475,7 +467,7 @@ async function createRoom(){
   document.getElementById('create-err').textContent='';
   if(!pwd){ document.getElementById('create-err').textContent='Please set a password.'; return; }
   try{
-    const r=await fetch(`${API_BASE}/api/create-room`,{method:'POST',
+    const r=await fetch('/api/create-room',{method:'POST',
       headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pwd})});
     const d=await r.json();
     if(d.error){ document.getElementById('create-err').textContent=d.error; return; }
@@ -491,7 +483,7 @@ async function goJoin(){
   if(!code){ document.getElementById('join-err').textContent='Enter a room code.'; return; }
   if(!pwd)  { document.getElementById('join-err').textContent='Enter the meeting password.'; return; }
   try{
-    const r=await fetch(`${API_BASE}/api/room/${code}/verify`,{method:'POST',
+    const r=await fetch(`/api/room/${code}/verify`,{method:'POST',
       headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pwd})});
     const d=await r.json();
     if(d.error)    { document.getElementById('join-err').textContent=d.error; return; }
@@ -522,7 +514,7 @@ async function startPrecall(code){
     roleBadge.textContent='Participant';
     roleBadge.className='role-badge role-guest';
     try{
-      const r=await fetch(`${API_BASE}/api/room/${code}`);
+      const r=await fetch(`/api/room/${code}`);
       const d=await r.json();
       const n=d.participants||0;
       document.getElementById('pre-info').textContent=
@@ -576,7 +568,7 @@ async function enterMeeting(){
 
 // ════════════ SOCKET ════════════
 function connectSocket(){
-  socket=io(API_BASE,{transports:['websocket','polling']});
+  socket=io(location.origin,{transports:['websocket','polling']});
 
   socket.on('connect',()=>{
     if(joiningAsHost){
