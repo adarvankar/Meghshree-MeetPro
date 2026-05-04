@@ -1,6 +1,3 @@
-import eventlet
-eventlet.monkey_patch()
-
 from flask import Flask, request, jsonify, send_from_directory
 from flask_socketio import SocketIO, join_room, emit
 from flask_cors import CORS
@@ -11,7 +8,8 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = 'meetpro-2026-secret'
 CORS(app)
 
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet',
+# ✅ Using gevent - works reliably on Render free tier
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent',
                     logger=False, engineio_logger=False)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
