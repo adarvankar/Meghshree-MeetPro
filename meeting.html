@@ -86,13 +86,16 @@ input,textarea{outline:none;font-family:inherit}
 
 /* ── MEETING ─────────────────────────────────────────── */
 #meeting{display:grid;grid-template-rows:56px 1fr 80px;grid-template-columns:1fr;height:100vh}
-#meeting.with-sidebar{grid-template-columns:1fr 320px}
+#meeting.with-sidebar{grid-template-columns:320px 1fr}
 
 /* Top bar */
 .topbar{
   display:flex;align-items:center;justify-content:space-between;padding:0 16px;
   background:rgba(26,29,39,.97);border-bottom:1px solid var(--border);z-index:10}
 #meeting.with-sidebar .topbar{grid-column:1/-1}
+#meeting.with-sidebar .sidebar{grid-column:1;grid-row:2/3}
+#meeting.with-sidebar .vgrid{grid-column:2}
+#meeting.with-sidebar .ctrlbar{grid-column:2}
 .tbl{display:flex;align-items:center;gap:10px}
 .top-logo{font-size:18px;font-weight:800}
 .top-logo span{background:linear-gradient(135deg,var(--accent),var(--accent2));
@@ -163,7 +166,7 @@ input,textarea{outline:none;font-family:inherit}
 
 /* Sidebar */
 .sidebar{
-  background:var(--surface);border-left:1px solid var(--border);
+  background:var(--surface);border-right:1px solid var(--border);
   display:flex;flex-direction:column;overflow:hidden;grid-row:1/-1}
 .stabs{display:flex;border-bottom:1px solid var(--border)}
 .stab{flex:1;padding:14px;font-size:13px;font-weight:600;background:none;
@@ -431,7 +434,10 @@ input,textarea{outline:none;font-family:inherit}
     <button class="cbtn" id="reactbtn" onclick="toggleReactPanel()">
       <span class="cicon">😀</span><span class="clabel">React</span>
     </button>
-    <button class="cbtn" id="recbtn" onclick="toggleRec()">
+    <button class="cbtn" id="invitebtn" onclick="copyLink()" style="display:none;">
+      <span class="cicon">🔗</span><span class="clabel">Invite</span>
+    </button>
+    <button class="cbtn" id="recbtn" onclick="toggleRec()" style="display:none;">
       <span class="cicon" id="recico">⏺</span><span class="clabel" id="reclbl">Record</span>
     </button>
     <div class="csep"></div>
@@ -597,13 +603,12 @@ async function enterMeeting(){
 // MEETING START
 // ════════════════════════════════════════════════
 function applyHostUI(){
-  // Host-only buttons: Record + Share-link copy in topbar
   if(isHost){
     document.getElementById('recbtn').style.display='';
+    document.getElementById('invitebtn').style.display='';
     document.getElementById('host-badge').style.display='inline-flex';
-  } else {
-    document.getElementById('recbtn').style.display='none';
   }
+  // guests: both stay hidden (already hidden via inline style)
 }
 
 // Show admit popup when someone knocks (host only)
@@ -1154,7 +1159,9 @@ function pad(n){ return String(n).padStart(2,'0'); }
 
 function copyLink(){
   const link=location.origin+'/room/'+roomId;
-  navigator.clipboard?.writeText(link).then(()=>toast('Meeting link copied! 📋'));
+  navigator.clipboard?.writeText(link)
+    .then(()=>toast('📋 Invite link copied!\n'+link))
+    .catch(()=>{ prompt('Copy this link to invite:', link); });
 }
 
 function toast(msg,dur=3000){
