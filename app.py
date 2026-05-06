@@ -70,37 +70,35 @@ def on_knock(data):
     name    = (data.get('name') or 'Guest').strip()[:40]
     user_id = data.get('userId') or str(uuid.uuid4())
 
-    if room_id not in rooms:
-        # Room doesn't exist yet — they become host, admit directly
-        get_room(room_id)
-
-    room = rooms[room_id]
+    # Create room if it doesn't exist
+    room = get_room(room_id)
 
     # Store in waiting list
     room['waiting'][request.sid] = {
         'name': name, 'userId': user_id, 'sid': request.sid
     }
 
-    # If room is empty → auto-admit as host
+    # If no one in the room yet → auto-admit as host
     if not room['participants']:
         room['host_sid'] = request.sid
         room['waiting'].pop(request.sid, None)
+        # emit() here targets the current (knocking) socket — correct
         emit('admitted', {'roomId': room_id, 'userId': user_id, 'isHost': True})
         return
 
-    # Tell knocker to show waiting screen first
+    # Someone is already in the room — tell knocker to wait
     emit('waiting', {'message': 'Waiting for host to admit you…'})
 
-    # Notify host directly via their socket ID
+    # Use socketio.emit() with room= to target a specific sid
     host_sid = room.get('host_sid')
-    if host_sid:
-        emit('participant-knocking', {
+    if host_sid and host_sid != request.sid:
+        socketio.emit('participant-knocking', {
             'name': name,
             'userId': user_id,
             'knockerSid': request.sid
         }, to=host_sid)
     else:
-        # No host tracked — admit directly (fallback)
+        # No host SID stored — admit directly as fallback
         room['waiting'].pop(request.sid, None)
         emit('admitted', {'roomId': room_id, 'userId': user_id, 'isHost': False})
 
@@ -111,9 +109,8 @@ def on_admit(data):
     room_id     = (data.get('roomId') or '').upper()
     if not knocker_sid:
         return
-    # Tell the knocker they're admitted
-    emit('admitted', {'roomId': room_id, 'isHost': False}, to=knocker_sid)
-    # Clean up waiting list
+    # Use socketio.emit() to target the waiting participant's socket
+    socketio.emit('admitted', {'roomId': room_id, 'isHost': False}, to=knocker_sid)
     if room_id in rooms:
         rooms[room_id]['waiting'].pop(knocker_sid, None)
 
@@ -124,7 +121,7 @@ def on_deny(data):
     room_id     = (data.get('roomId') or '').upper()
     if not knocker_sid:
         return
-    emit('denied', {'message': 'The host did not admit you.'}, to=knocker_sid)
+    socketio.emit('denied', {'message': 'The host did not admit you.'}, to=knocker_sid)
     if room_id in rooms:
         rooms[room_id]['waiting'].pop(knocker_sid, None)
 
