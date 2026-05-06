@@ -522,6 +522,7 @@ async function createAndJoin(){
   try{
     const r=await fetch((window.MEETPRO_BACKEND||'')+'/api/create-room',{method:'POST'});
     const d=await r.json();
+    isHost=true;  // creator is always host
     startJoin(d.roomId);
   }catch(e){ toast('Cannot reach server — is it running?'); }
 }
@@ -529,6 +530,7 @@ async function createAndJoin(){
 function joinRoom(){
   const c=document.getElementById('join-code').value.trim().toUpperCase();
   if(!c){ toast('Enter a room code'); return; }
+  isHost=false;  // joining via code = guest
   startJoin(c);
 }
 
@@ -594,9 +596,17 @@ async function enterMeeting(){
   myId='u_'+Math.random().toString(36).slice(2,10);
   localStream?.getAudioTracks().forEach(t=>t.enabled=micOn);
   localStream?.getVideoTracks().forEach(t=>t.enabled=camOn);
-  // Show waiting room while socket connects & knock is sent
-  show('waiting');
-  startMeeting();
+
+  if(isHost){
+    // Host: go straight to meeting, join directly
+    show('meeting');
+    startMeetingUI();
+    startMeeting(); // connects socket → emits join
+  } else {
+    // Guest: show waiting room, knock
+    show('waiting');
+    startMeeting(); // connects socket → emits knock
+  }
 }
 
 // ════════════════════════════════════════════════
@@ -678,39 +688,49 @@ function connectSocket(){
   socket=io(BACKEND_URL,{transports:['websocket','polling'],reconnectionAttempts:8,timeout:15000});
 
   socket.on('connect',()=>{
-    // Send knock instead of direct join — server decides admit/auto-admit
-    socket.emit('knock',{roomId,name:myName,userId:myId});
+    if(isHost){
+      // Host joins directly — no knock needed
+      socket.emit('join',{roomId,name:myName,userId:myId,videoOn:camOn,audioOn:micOn});
+    } else {
+      // Guest knocks and waits
+      socket.emit('knock',{roomId,name:myName,userId:myId});
+    }
   });
 
-  // Server says: wait for host to admit you
-  socket.on('waiting',()=>{
+  // Guest: server says wait
+  socket.on('waiting',(data)=>{
     show('waiting');
-    document.getElementById('wait-room').classList.remove('hidden');
   });
 
-  // Server says: you are admitted — now actually join
+  // Guest: host admitted them → now join
   socket.on('admitted',(data)=>{
-    isHost = data.isHost || false;
     show('meeting');
     startMeetingUI();
-    socket.emit('join',{roomId,name:myName,userId:myId,
-      videoOn:camOn,audioOn:micOn,isHost});
+    socket.emit('join',{roomId,name:myName,userId:myId,videoOn:camOn,audioOn:micOn});
     applyHostUI();
   });
 
-  // Server says: host denied you
+  // Guest: no host online → auto admitted
+  socket.on('auto-admitted',(data)=>{
+    show('meeting');
+    startMeetingUI();
+    socket.emit('join',{roomId,name:myName,userId:myId,videoOn:camOn,audioOn:micOn});
+    applyHostUI();
+  });
+
+  // Guest: denied by host
   socket.on('denied',(data)=>{
     show('precall');
     toast('❌ The host did not admit you.');
   });
 
-  // Host receives this when someone knocks
+  // Host receives knock notification from guest
   socket.on('participant-knocking',(data)=>{
-    if(isHost) showAdmitPopup(data.name, data.knockerSid);
+    showAdmitPopup(data.name, data.knockerSid);
   });
 
   socket.on('room-joined',async({userId,roomId:rid,participants:ex,chatHistory,isHost:h})=>{
-    if(h) isHost=true; applyHostUI();
+    if(h !== undefined) isHost=h; applyHostUI();
     chatHistory.forEach(m=>renderMsg(m,m.userId===myId));
     ex.forEach(p=>{ participants[p.id]=p; addTile(p.id,null,p.name,false); });
     refreshPeopleList(); refreshGrid();

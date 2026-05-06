@@ -8,36 +8,29 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = 'meetpro-2026-secret'
 CORS(app, resources={r"/*": {"origins": "*"}})
 
-socketio = SocketIO(
-    app,
-    cors_allowed_origins="*",
-    async_mode='threading',
-    logger=False,
-    engineio_logger=False,
-    ping_timeout=60,
-    ping_interval=25
-)
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading',
+                    logger=False, engineio_logger=False,
+                    ping_timeout=60, ping_interval=25)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 rooms        = {}   # roomId -> room dict
 user_sockets = {}   # userId -> sid
-socket_users = {}   # sid -> {userId, roomId}
+socket_users = {}   # sid    -> {userId, roomId}
 
 def get_room(room_id):
     if room_id not in rooms:
         rooms[room_id] = {
             'id': room_id,
-            'participants': {},   # userId -> participant dict
-            'waiting': {},        # sid -> {name, userId}
+            'participants': {},
             'host_sid': None,
+            'waiting': {},     # sid -> {name, userId}
             'chat': [],
             'created_at': datetime.now().isoformat()
         }
     return rooms[room_id]
 
-# ─── HTTP ────────────────────────────────────────────────────────────────────
-
+# ─── HTTP ─────────────────────────────────────────────────────────────────────
 @app.route('/')
 @app.route('/room/<room_id>')
 def index(room_id=None):
@@ -55,85 +48,15 @@ def room_info(room_id):
     if rid not in rooms:
         return jsonify({'exists': False, 'participants': 0})
     r = rooms[rid]
-    return jsonify({
-        'exists': True,
-        'participants': len(r['participants']),
-        'created_at': r['created_at']
-    })
+    return jsonify({'exists': True, 'participants': len(r['participants']),
+                    'created_at': r['created_at']})
 
-# ─── WAITING ROOM ────────────────────────────────────────────────────────────
-
-@socketio.on('knock')
-def on_knock(data):
-    """Participant knocks — waits for host to admit."""
-    room_id = (data.get('roomId') or '').upper().strip()
-    name    = (data.get('name') or 'Guest').strip()[:40]
-    user_id = data.get('userId') or str(uuid.uuid4())
-
-    # Create room if it doesn't exist
-    room = get_room(room_id)
-
-    # Store in waiting list
-    room['waiting'][request.sid] = {
-        'name': name, 'userId': user_id, 'sid': request.sid
-    }
-
-    # If no one in the room yet → auto-admit as host
-    if not room['participants']:
-        room['host_sid'] = request.sid
-        room['waiting'].pop(request.sid, None)
-        # emit() here targets the current (knocking) socket — correct
-        emit('admitted', {'roomId': room_id, 'userId': user_id, 'isHost': True})
-        return
-
-    # Someone is already in the room — tell knocker to wait
-    emit('waiting', {'message': 'Waiting for host to admit you…'})
-
-    # Use socketio.emit() with room= to target a specific sid
-    host_sid = room.get('host_sid')
-    if host_sid and host_sid != request.sid:
-        socketio.emit('participant-knocking', {
-            'name': name,
-            'userId': user_id,
-            'knockerSid': request.sid
-        }, to=host_sid)
-    else:
-        # No host SID stored — admit directly as fallback
-        room['waiting'].pop(request.sid, None)
-        emit('admitted', {'roomId': room_id, 'userId': user_id, 'isHost': False})
-
-@socketio.on('admit-participant')
-def on_admit(data):
-    """Host admits a waiting participant."""
-    knocker_sid = data.get('knockerSid')
-    room_id     = (data.get('roomId') or '').upper()
-    if not knocker_sid:
-        return
-    # Use socketio.emit() to target the waiting participant's socket
-    socketio.emit('admitted', {'roomId': room_id, 'isHost': False}, to=knocker_sid)
-    if room_id in rooms:
-        rooms[room_id]['waiting'].pop(knocker_sid, None)
-
-@socketio.on('deny-participant')
-def on_deny(data):
-    """Host denies a waiting participant."""
-    knocker_sid = data.get('knockerSid')
-    room_id     = (data.get('roomId') or '').upper()
-    if not knocker_sid:
-        return
-    socketio.emit('denied', {'message': 'The host did not admit you.'}, to=knocker_sid)
-    if room_id in rooms:
-        rooms[room_id]['waiting'].pop(knocker_sid, None)
-
-# ─── JOIN / LEAVE ─────────────────────────────────────────────────────────────
-
+# ─── JOIN (host uses this directly) ──────────────────────────────────────────
 @socketio.on('join')
 def on_join(data):
-    """Participant actually joins the room (after being admitted)."""
     room_id = (data.get('roomId') or '').upper().strip()
     name    = (data.get('name') or 'Guest').strip()[:40]
     user_id = data.get('userId') or str(uuid.uuid4())
-    is_host = data.get('isHost', False)
 
     room = get_room(room_id)
 
@@ -145,9 +68,10 @@ def on_join(data):
     user_sockets[user_id]     = request.sid
     socket_users[request.sid] = {'userId': user_id, 'roomId': room_id}
 
-    if not room['host_sid'] or is_host:
+    # First joiner becomes host
+    is_host = (room['host_sid'] is None)
+    if is_host:
         room['host_sid'] = request.sid
-        is_host = True
 
     participant = {
         'id': user_id, 'name': name,
@@ -160,18 +84,66 @@ def on_join(data):
     }
     room['participants'][user_id] = participant
 
-    # Send current state to the joiner
     emit('room-joined', {
-        'userId': user_id,
-        'roomId': room_id,
-        'isHost': is_host,
+        'userId': user_id, 'roomId': room_id, 'isHost': is_host,
         'participants': [p for uid, p in room['participants'].items() if uid != user_id],
         'chatHistory': room['chat'][-100:],
     })
-
-    # Notify everyone else
     emit('participant-joined', participant, to=room_id, skip_sid=request.sid)
 
+# ─── KNOCK (guests use this — host gets popup) ────────────────────────────────
+@socketio.on('knock')
+def on_knock(data):
+    room_id = (data.get('roomId') or '').upper().strip()
+    name    = (data.get('name') or 'Guest').strip()[:40]
+    user_id = data.get('userId') or str(uuid.uuid4())
+
+    room = get_room(room_id)
+    room['waiting'][request.sid] = {'name': name, 'userId': user_id}
+
+    host_sid = room.get('host_sid')
+
+    if not host_sid or host_sid not in [s for s in socket_users]:
+        # No host online — auto admit
+        room['waiting'].pop(request.sid, None)
+        emit('auto-admitted', {'roomId': room_id, 'userId': user_id})
+        return
+
+    # Tell guest to wait
+    emit('waiting', {'message': 'Waiting for host to admit you…'})
+
+    # Notify host using socketio.emit targeting host's sid directly
+    socketio.emit('participant-knocking', {
+        'name': name,
+        'userId': user_id,
+        'knockerSid': request.sid
+    }, to=host_sid)
+
+@socketio.on('admit-participant')
+def on_admit(data):
+    knocker_sid = data.get('knockerSid')
+    room_id     = (data.get('roomId') or '').upper()
+    if not knocker_sid:
+        return
+    waiting_info = rooms.get(room_id, {}).get('waiting', {}).get(knocker_sid, {})
+    socketio.emit('admitted', {
+        'roomId': room_id,
+        'userId': waiting_info.get('userId', ''),
+    }, to=knocker_sid)
+    if room_id in rooms:
+        rooms[room_id]['waiting'].pop(knocker_sid, None)
+
+@socketio.on('deny-participant')
+def on_deny(data):
+    knocker_sid = data.get('knockerSid')
+    room_id     = (data.get('roomId') or '').upper()
+    if not knocker_sid:
+        return
+    socketio.emit('denied', {'message': 'The host did not admit you.'}, to=knocker_sid)
+    if room_id in rooms:
+        rooms[room_id]['waiting'].pop(knocker_sid, None)
+
+# ─── DISCONNECT ───────────────────────────────────────────────────────────────
 @socketio.on('disconnect')
 def on_disconnect():
     info = socket_users.pop(request.sid, None)
@@ -183,32 +155,30 @@ def on_disconnect():
     if room_id in rooms:
         rooms[room_id]['participants'].pop(user_id, None)
         rooms[room_id]['waiting'].pop(request.sid, None)
-        emit('participant-left', {'userId': user_id}, to=room_id)
+        socketio.emit('participant-left', {'userId': user_id}, to=room_id)
         if not rooms[room_id]['participants']:
             del rooms[room_id]
 
-# ─── WebRTC SIGNALING ────────────────────────────────────────────────────────
-
+# ─── WebRTC SIGNALING ─────────────────────────────────────────────────────────
 @socketio.on('offer')
 def on_offer(data):
     target_sid = user_sockets.get(data.get('targetUserId'))
     if target_sid:
-        emit('offer', data, to=target_sid)
+        socketio.emit('offer', data, to=target_sid)
 
 @socketio.on('answer')
 def on_answer(data):
     target_sid = user_sockets.get(data.get('targetUserId'))
     if target_sid:
-        emit('answer', data, to=target_sid)
+        socketio.emit('answer', data, to=target_sid)
 
 @socketio.on('ice-candidate')
 def on_ice(data):
     target_sid = user_sockets.get(data.get('targetUserId'))
     if target_sid:
-        emit('ice-candidate', data, to=target_sid)
+        socketio.emit('ice-candidate', data, to=target_sid)
 
-# ─── CHAT / REACTIONS ────────────────────────────────────────────────────────
-
+# ─── CHAT / REACTIONS ─────────────────────────────────────────────────────────
 @socketio.on('chat-message')
 def on_chat(data):
     room_id = (data.get('roomId') or '').upper()
@@ -226,7 +196,7 @@ def on_chat(data):
     rooms[room_id]['chat'].append(msg)
     if len(rooms[room_id]['chat']) > 500:
         rooms[room_id]['chat'] = rooms[room_id]['chat'][-500:]
-    emit('chat-message', msg, to=room_id)
+    socketio.emit('chat-message', msg, to=room_id)
 
 @socketio.on('raise-hand')
 def on_raise_hand(data):
@@ -234,12 +204,12 @@ def on_raise_hand(data):
     user_id = data.get('userId')
     if room_id in rooms and user_id in rooms[room_id]['participants']:
         rooms[room_id]['participants'][user_id]['handRaised'] = bool(data.get('raised'))
-    emit('raise-hand', data, to=room_id)
+    socketio.emit('raise-hand', data, to=room_id)
 
 @socketio.on('reaction')
 def on_reaction(data):
     room_id = (data.get('roomId') or '').upper()
-    emit('reaction', data, to=room_id, skip_sid=request.sid)
+    socketio.emit('reaction', data, to=room_id)
 
 @socketio.on('media-state')
 def on_media_state(data):
@@ -250,10 +220,9 @@ def on_media_state(data):
         for k in ['videoOn', 'audioOn', 'isScreenSharing']:
             if k in data:
                 p[k] = data[k]
-    emit('media-state', data, to=room_id, skip_sid=request.sid)
-
-# ─── ENTRY POINT ─────────────────────────────────────────────────────────────
+    socketio.emit('media-state', data, to=room_id, skip_sid=request.sid)
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
-    socketio.run(app, host='0.0.0.0', port=port, debug=False)
+    socketio.run(app, host='0.0.0.0', port=port, debug=False,
+                 allow_unsafe_werkzeug=True)
