@@ -88,14 +88,21 @@ def on_knock(data):
         emit('admitted', {'roomId': room_id, 'userId': user_id, 'isHost': True})
         return
 
-    # Notify host (and all existing participants)
-    emit('participant-knocking', {
-        'name': name,
-        'userId': user_id,
-        'knockerSid': request.sid
-    }, to=room_id)
-
+    # Tell knocker to show waiting screen first
     emit('waiting', {'message': 'Waiting for host to admit you…'})
+
+    # Notify host directly via their socket ID
+    host_sid = room.get('host_sid')
+    if host_sid:
+        emit('participant-knocking', {
+            'name': name,
+            'userId': user_id,
+            'knockerSid': request.sid
+        }, to=host_sid)
+    else:
+        # No host tracked — admit directly (fallback)
+        room['waiting'].pop(request.sid, None)
+        emit('admitted', {'roomId': room_id, 'userId': user_id, 'isHost': False})
 
 @socketio.on('admit-participant')
 def on_admit(data):
@@ -141,7 +148,7 @@ def on_join(data):
     user_sockets[user_id]     = request.sid
     socket_users[request.sid] = {'userId': user_id, 'roomId': room_id}
 
-    if not room['host_sid']:
+    if not room['host_sid'] or is_host:
         room['host_sid'] = request.sid
         is_host = True
 
